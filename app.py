@@ -89,5 +89,31 @@ def create_measure():
             session.close()
 
 
+@app.get("/api/measures/<user_id>")
+def get_user_measures(user_id):
+    session = None
+    try:
+        session = get_session(db_host, db_user, db_password, db_name)
+        measures = session.query(Measures).filter(Measures.enteredBy == user_id).all()
+        return jsonify(
+            [
+                {
+                    "id": measure.OID,
+                    "meterId": measure.meterId,
+                    "value": measure.value,
+                    "timestampMs": measure.timestampMs,
+                    "enteredBy": measure.enteredBy,
+                }
+                for measure in measures
+            ]
+        ), 200
+    except SQLAlchemyError:
+        app.logger.exception("Failed to retrieve measures")
+        return jsonify(error="Unable to retrieve measures"), 500
+    finally:
+        if session is not None:
+            session.close()
+
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, debug=True)
