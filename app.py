@@ -4,7 +4,7 @@ import os
 from flask import Flask, jsonify, request
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from model import Measures, get_session
+from model import Group, Measures, MeterName, Site, SubGroup, Unit, get_session
 
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -13,6 +13,14 @@ db_host = 'localhost'
 db_user = 'vajnar'
 db_password = 'AldebaraN7#'
 db_name = 'pte'
+
+REFERENCE_FIELDS = {
+    "siteId": Site,
+    "groupId": Group,
+    "subGroupId": SubGroup,
+    "unitId": Unit,
+    "meterNameId": MeterName,
+}
 
 @app.post("/api/measures")
 def create_measure():
@@ -25,7 +33,7 @@ def create_measure():
         if not isinstance(item, dict):
             return jsonify(error=f"Item {index} must be a JSON object"), 400
 
-        meter_id = item.get("meterId")
+        reference_ids = {field: item.get(field) for field in REFERENCE_FIELDS}
         oid = item.get("id")
         value = item.get("value")
         timestamp_ms = item.get("timestampMs")
@@ -33,8 +41,9 @@ def create_measure():
 
         if not isinstance(oid, str) or not oid.strip():
             return jsonify(error=f"Item {index}: 'OID' must be a non-empty string"), 400
-        if not isinstance(meter_id, str) or not meter_id.strip():
-            return jsonify(error=f"Item {index}: 'meterId' must be a non-empty string"), 400
+        for field, reference_id in reference_ids.items():
+            if isinstance(reference_id, bool) or not isinstance(reference_id, int) or not 1 <= reference_id <= 2**31 - 1:
+                return jsonify(error=f"Item {index}: '{field}' must be a positive 32-bit integer"), 400
         try:
             valid_value = (
                 not isinstance(value, bool)
@@ -57,7 +66,7 @@ def create_measure():
         measures.append(
             Measures(
                 OID=oid.strip(),
-                meterId=meter_id.strip(),
+                **reference_ids,
                 value=value,
                 timestampMs=timestamp_ms,
                 enteredBy=entered_by.strip(),
@@ -71,14 +80,19 @@ def create_measure():
     session = None
     try:
         session = get_session(db_host, db_user, db_password, db_name)
+        for field, model in REFERENCE_FIELDS.items():
+            ids = {getattr(measure, field) for measure in measures}
+            existing_ids = {row[0] for row in session.query(model.id).filter(model.id.in_(ids)).all()}
+            if ids - existing_ids:
+                return jsonify(error=f"Unknown {field}: {sorted(ids - existing_ids)}"), 400
         session.add_all(measures)
         session.commit()
         return jsonify(ids=[measure.id for measure in measures], count=len(measures)), 201
     except IntegrityError:
         if session is not None:
             session.rollback()
-        app.logger.info("Rejected measure with a duplicate OID")
-        return jsonify(error="A measure with this OID already exists"), 409
+        app.logger.info("Rejected measure due to a database integrity constraint")
+        return jsonify(error="Measure conflicts with existing data or reference values"), 409
     except SQLAlchemyError:
         if session is not None:
             session.rollback()
@@ -99,7 +113,11 @@ def get_user_measures(user_id):
             [
                 {
                     "id": measure.OID,
-                    "meterId": measure.meterId,
+                    "siteId": measure.siteId,
+                    "groupId": measure.groupId,
+                    "subGroupId": measure.subGroupId,
+                    "unitId": measure.unitId,
+                    "meterNameId": measure.meterNameId,
                     "value": measure.value,
                     "timestampMs": measure.timestampMs,
                     "enteredBy": measure.enteredBy,
