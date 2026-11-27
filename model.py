@@ -39,7 +39,7 @@ class MeterName(Base):
     __tablename__ = 'meter_names'
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(255), nullable=False, unique=True)
+    name = Column(String(255), nullable=False)
 
 
 @lru_cache(maxsize=32)

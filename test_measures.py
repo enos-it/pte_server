@@ -1,14 +1,14 @@
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, func, inspect, select
 from sqlalchemy.dialects.mysql import DOUBLE
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 
 import app as server
+from init_db import initialize_database
 from model import Base, Group, Measures, MeterName, Site, SubGroup, Unit
 
 
@@ -25,12 +25,7 @@ class MeasuresTest(unittest.TestCase):
         def enable_foreign_keys(connection, _):
             connection.execute("PRAGMA foreign_keys=ON")
 
-        Base.metadata.create_all(self.engine)
-        with self.engine.begin() as connection:
-            sql = Path(__file__).with_name("reference_data.sql").read_text(encoding="utf-8")
-            for statement in sql.split(";"):
-                if statement.strip():
-                    connection.exec_driver_sql(statement)
+        initialize_database(self.engine)
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
         self.session_patch = patch.object(server, "get_session", side_effect=lambda *args: self.Session())
         self.session_patch.start()
@@ -59,6 +54,68 @@ class MeasuresTest(unittest.TestCase):
         result = response.json[0]
         self.assertEqual(float(result.pop("value")), self.measure["value"])
         self.assertEqual(result, {key: value for key, value in self.measure.items() if key != "value"})
+
+    def test_initialization_rejects_nonempty_database(self):
+        with self.assertRaisesRegex(RuntimeError, "Database is not empty"):
+            initialize_database(self.engine)
+        session = self.Session()
+        try:
+            self.assertEqual(session.query(MeterName).count(), 92)
+        finally:
+            session.close()
+
+    def test_initialization_accepts_existing_empty_tables(self):
+        engine = create_engine("sqlite://")
+        try:
+            Base.metadata.create_all(engine)
+            initialize_database(engine)
+            with engine.connect() as connection:
+                self.assertEqual(connection.execute(select(func.count()).select_from(MeterName)).scalar(), 92)
+        finally:
+            engine.dispose()
+
+    def test_initialization_rejects_other_populated_tables_before_creating_schema(self):
+        engine = create_engine("sqlite://")
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql("CREATE TABLE other_data (id INTEGER PRIMARY KEY)")
+                connection.exec_driver_sql("INSERT INTO other_data (id) VALUES (1)")
+            with self.assertRaisesRegex(RuntimeError, "other_data"):
+                initialize_database(engine)
+            self.assertEqual(inspect(engine).get_table_names(), ["other_data"])
+        finally:
+            engine.dispose()
+
+    def test_initialization_rejects_shifted_reference_ids(self):
+        engine = create_engine("sqlite://")
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "CREATE TABLE sites (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(255) NOT NULL UNIQUE)"
+                )
+                connection.exec_driver_sql("INSERT INTO sites (id, name) VALUES (9, 'Removed')")
+                connection.exec_driver_sql("DELETE FROM sites")
+            with self.assertRaisesRegex(RuntimeError, "Unexpected reference IDs in sites"):
+                initialize_database(engine)
+            with engine.connect() as connection:
+                self.assertEqual(connection.execute(select(func.count()).select_from(Site)).scalar(), 0)
+        finally:
+            engine.dispose()
+
+    def test_meter_name_seed_ids_and_nonunique_labels(self):
+        session = self.Session()
+        try:
+            names = {row.id: row.name for row in session.query(MeterName).all()}
+            self.assertEqual(set(names), set(range(1, 93)))
+            self.assertEqual(names[1], "Števec Zagonov")
+            self.assertEqual(names[7], "Toplotni števec")
+            self.assertEqual(names[14], "Toplotni Števec")
+            self.assertEqual(names[90], "Ur od regeneracije")
+            self.assertEqual(names[92], "Števec izgub vode")
+            session.add(MeterName(name=names[7]))
+            session.commit()
+        finally:
+            session.close()
 
     def test_invalid_and_unknown_reference_ids_reject_batch(self):
         for field in server.REFERENCE_FIELDS:

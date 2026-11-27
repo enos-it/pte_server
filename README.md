@@ -3,10 +3,22 @@
 ## Meritve in šifranti
 
 Nova shema vsebuje šifrante `sites`, `meter_groups`, `subgroups`, `units` in
-`meter_names`. Vsak zapis ima celoštevilski `id` in enolični `name`. Nastavite
-aplikacijo na novo prazno bazo; tabele se ustvarijo ob prvem dostopu do baze.
-Za začetne vrednosti po ustvaritvi tabel enkrat izvedite `reference_data.sql`
-kot UTF-8.
+`meter_names`. Vsak zapis ima celoštevilski `id` in `name`; imena so enolična
+razen v `meter_names`, kjer se lahko razlikujejo le po velikosti črk. Nastavite
+aplikacijo na novo prazno bazo. Ustavite aplikacijo in za inicializacijo zaženite:
+
+```powershell
+python init_db.py
+```
+
+Skripta uporablja nastavitve baze iz `app.py`, ustvari manjkajoče tabele in
+enkrat izvede `reference_data.sql` kot UTF-8. Baza mora že obstajati in biti
+prazna; skripta zavrne bazo, ki vsebuje podatke. Tabele se sicer ustvarijo tudi
+ob prvem dostopu aplikacije do baze, vendar brez začetnih vrednosti šifrantov.
+ID-ji `meter_names` v tej datoteki so določeni skladno z mobilnim šifrantom.
+Skripta je namenjena praznim tabelam in ni migracija obstoječih podatkov.
+V obstoječi bazi je treba pred dodajanjem novih imen odstraniti omejitev
+enoličnosti stolpca `meter_names.name`; `create_all` je ne odstrani.
 Šifrante lahko nato urejate v bazi; zapisov, na katere se meritve sklicujejo,
 ni mogoče izbrisati, dokler obstajajo njihove meritve.
 
